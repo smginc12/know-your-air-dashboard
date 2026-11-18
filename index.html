@@ -145,8 +145,8 @@
 <body>
   <div class="wrap">
     <h1>Know Your Air Detroit: Ambassador Dashboard</h1>
-    <p class="subtitle">Prototype tracking tool for the Youth Ambassador Program. Logs each event by location, attendance, and enrollment, so progress can be checked by district at any time.</p>
-    <p class="demo-note">Demo version. Entries you log here are saved only in this browser, on this device, so they will not be seen by anyone else viewing this file. A live version would save every ambassador's entries to one shared list everyone can see.</p>
+    <p class="subtitle">Tracking tool for the Youth Ambassador Program. Logs each event by location, attendance, and enrollment, so progress can be checked by district at any time.</p>
+    <p class="demo-note">Entries save to a shared Google Sheet, so everyone using this page sees the same list. It can take a few seconds for a new entry to show up after saving.</p>
 
     <div class="stat-row">
       <div class="stat-tile">
@@ -166,7 +166,7 @@
     <div class="card">
       <h2>Enrollment by district</h2>
       <div class="hint">Detroit Alerts 365 sign-ups logged so far, grouped by the district where the event happened.</div>
-      <div id="chartArea"></div>
+      <div id="chartArea"><div class="loading-note">Loading…</div></div>
     </div>
 
     <div class="card">
@@ -218,7 +218,6 @@
         </div>
         <div class="form-actions">
           <button type="submit" id="submitBtn">Log event</button>
-          <button type="button" class="secondary" id="clearBtn">Clear demo data</button>
           <span class="form-status" id="formStatus"></span>
         </div>
       </form>
@@ -240,40 +239,46 @@
             </tr>
           </thead>
           <tbody id="eventsBody">
-            <tr><td colspan="7" class="empty-note">No events logged yet.</td></tr>
+            <tr><td colspan="7" class="empty-note">Loading…</td></tr>
           </tbody>
         </table>
+      </div>
+      <div class="footer-row">
+        <button type="button" class="secondary" id="refreshBtn">Refresh</button>
       </div>
     </div>
   </div>
 
 <script>
 (function () {
+  // Paste your Apps Script Web App URL here (ends in /exec).
+  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw8jDOkV2pOhdLpWEHqrBTCZXzs5Wuenqo6VDOfjThyJE9qawN5vapc7ETdI6hcfKQl/exec";
+
   const DISTRICTS = ["District 1","District 2","District 3","District 4","District 5","District 6","District 7","Other / not sure"];
-  const STORAGE_KEY = "kya_ambassador_events_demo";
 
   const form = document.getElementById('entryForm');
   const submitBtn = document.getElementById('submitBtn');
-  const clearBtn = document.getElementById('clearBtn');
   const formStatus = document.getElementById('formStatus');
-
-  function loadEvents() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  function saveEvents(events) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
-    } catch (e) { /* ignore, demo only */ }
-  }
+  const refreshBtn = document.getElementById('refreshBtn');
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function normalizeEvent(raw) {
+    let dateVal = raw['Date'] || '';
+    if (typeof dateVal === 'string' && dateVal.length >= 10) {
+      dateVal = dateVal.slice(0, 10);
+    }
+    return {
+      eventName: raw['Event Name'] || '',
+      date: dateVal,
+      district: raw['District'] || '',
+      ambassador: raw['Ambassador'] || '',
+      attendance: Number(raw['Attendance']) || 0,
+      enrollment: Number(raw['Enrollment']) || 0,
+      language: raw['Language'] || 'English'
+    };
   }
 
   function renderChart(events) {
@@ -327,15 +332,25 @@
     ).join('');
   }
 
-  function renderAll() {
-    const events = loadEvents();
-    renderStats(events);
-    renderChart(events);
-    renderTable(events);
+  async function loadEvents() {
+    try {
+      const res = await fetch(SCRIPT_URL, { method: 'GET' });
+      const raw = await res.json();
+      const events = raw.map(normalizeEvent);
+      renderStats(events);
+      renderChart(events);
+      renderTable(events);
+    } catch (e) {
+      document.getElementById('chartArea').innerHTML = '<div class="bar-empty">Could not load data right now. Try Refresh in a moment.</div>';
+      document.getElementById('eventsBody').innerHTML = '<tr><td colspan="7" class="empty-note">Could not load data.</td></tr>';
+    }
   }
 
-  form.addEventListener('submit', function (ev) {
+  form.addEventListener('submit', async function (ev) {
     ev.preventDefault();
+    submitBtn.disabled = true;
+    formStatus.textContent = 'Saving…';
+    formStatus.className = 'form-status';
     const fd = new FormData(form);
     const entry = {
       eventName: fd.get('eventName').trim(),
@@ -344,26 +359,29 @@
       ambassador: fd.get('ambassador').trim(),
       attendance: Number(fd.get('attendance')) || 0,
       enrollment: Number(fd.get('enrollment')) || 0,
-      language: fd.get('language') || 'English',
-      loggedAt: new Date().toISOString()
+      language: fd.get('language') || 'English'
     };
-    const events = loadEvents();
-    events.push(entry);
-    saveEvents(events);
-    formStatus.textContent = 'Saved to this browser.';
-    formStatus.className = 'form-status ok';
-    form.reset();
-    renderAll();
+    try {
+      await fetch(SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify(entry)
+      });
+      formStatus.textContent = 'Saved.';
+      formStatus.className = 'form-status ok';
+      form.reset();
+      await loadEvents();
+    } catch (e) {
+      formStatus.textContent = 'Could not save. Check your connection and try again.';
+      formStatus.className = 'form-status error';
+    } finally {
+      submitBtn.disabled = false;
+    }
   });
 
-  clearBtn.addEventListener('click', function () {
-    saveEvents([]);
-    formStatus.textContent = 'Demo data cleared.';
-    formStatus.className = 'form-status';
-    renderAll();
-  });
+  refreshBtn.addEventListener('click', loadEvents);
 
-  renderAll();
+  loadEvents();
+  setInterval(loadEvents, 20000);
 })();
 </script>
 </body>
